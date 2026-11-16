@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Remplace cette adresse par le même e-mail que COIFFEUR_EMAIL dans index.html.
+    function isBarber() {
+      return request.auth != null
+        && request.auth.token.email == 'sidou1312@gmail.com';
+    }
+
+    function isAnonymousClient() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
+    function hasMatchingSlot(slotId, date, time) {
+      return existsAfter(/databases/$(database)/documents/creneaux/$(slotId))
+        && getAfter(/databases/$(database)/documents/creneaux/$(slotId)).data.date == date
+        && getAfter(/databases/$(database)/documents/creneaux/$(slotId)).data.heure == time;
+    }
+
+    function hasMatchingAppointment(slotId, date, time) {
+      return existsAfter(/databases/$(database)/documents/rendezvous/$(slotId))
+        && getAfter(/databases/$(database)/documents/rendezvous/$(slotId)).data.slotId == slotId
+        && getAfter(/databases/$(database)/documents/rendezvous/$(slotId)).data.date == date
+        && getAfter(/databases/$(database)/documents/rendezvous/$(slotId)).data.heure == time;
+    }
+
+    match /rendezvous/{slotId} {
+      // Noms et téléphones visibles uniquement après connexion du coiffeur.
+      allow get, list: if isBarber();
+
+      // Le coiffeur peut créer directement un rendez-vous ou un blocage.
+      // Les demandes clients doivent correspondre au créneau créé dans le même batch.
+      allow create: if (isBarber() || isAnonymousClient())
+        && request.resource.data.keys().hasOnly([
+          'date', 'heure', 'service', 'nom', 'tel', 'whatsappTel',
+          'source', 'statut', 'slotId', 'createdAt'
+        ])
+        && request.resource.data.slotId == slotId
+        && request.resource.data.date is string
+        && request.resource.data.heure is string
+        && (isBarber() || (
+          hasMatchingSlot(slotId, request.resource.data.date, request.resource.data.heure)
+          &&
+          request.resource.data.source == 'client'
+          && request.resource.data.statut == 'en_attente'
+          && request.resource.data.nom is string
+          && request.resource.data.tel is string
+          && request.resource.data.whatsappTel is string
+          && request.resource.data.service is string
+        ));
+
+      allow update, delete: if isBarber();
+    }
+
+    match /creneaux/{slotId} {
+      // Seules les dates et heures sont publiques, sans donnée personnelle.
+      allow get, list: if true;
+
+      allow create: if (isBarber() || isAnonymousClient())
+        && !exists(/databases/$(database)/documents/creneaux/$(slotId))
+        && request.resource.data.keys().hasOnly(['date', 'heure'])
+        && request.resource.data.date is string
+        && request.resource.data.heure is string
+        && (isBarber() || hasMatchingAppointment(slotId, request.resource.data.date, request.resource.data.heure));
+
+      allow update, delete: if isBarber();
+    }
+  }
+}
